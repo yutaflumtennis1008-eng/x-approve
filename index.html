@@ -104,7 +104,7 @@ async function main() {
     data = await r.json();
   } catch (e) { show("候補を取得できませんでした: " + e.message, true); return; }
   if (!data.ok) { show(data.error || "forbidden", true); return; }
-  if (!data.open) show("受付時間外です（平日12時・土日祝16時まで）。", true);
+  if (!data.open) show("受付時間外です（6時〜24時）。", true);
   render(data.cands || []);
 }
 
