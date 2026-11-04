@@ -25,7 +25,14 @@
   button.small{width:auto;padding:6px 12px;font-size:13px;margin:0;background:#e6ecef;color:#1f6f8b}
   .msg{margin-top:14px;padding:12px;border-radius:10px;background:#fff;font-size:15px;white-space:pre-wrap}
   .err{background:#fdecea;color:#c62828}
-  textarea{box-sizing:border-box;width:100%;min-height:140px;padding:12px;font-size:16px;line-height:1.6;border:1px solid #cdd6db;border-radius:12px;font-family:inherit;background:#fff}
+  textarea,input[type=url]{box-sizing:border-box;width:100%;padding:12px;font-size:16px;line-height:1.6;border:1px solid #cdd6db;border-radius:12px;font-family:inherit;background:#fff}
+  textarea{min-height:140px}
+  input[type=url]{margin-bottom:10px}
+  .tabs{display:flex;gap:8px;margin:0 0 14px}
+  .tabs button{flex:1;margin:0;padding:12px 6px;font-size:16px;background:#e6ecef;color:#1f6f8b}
+  .tabs button.on{background:#1f6f8b;color:#fff}
+  .kind{font-size:12px;color:#1f6f8b;font-weight:bold}
+  .item a{color:#1f6f8b;word-break:break-all;font-size:13px}
   .note{font-size:12px;color:#ad1457;margin:6px 0 0}
   .count{font-size:12px;color:#888;text-align:right;margin-top:4px}
   .item{background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
@@ -47,15 +54,25 @@
 <div id="list"></div>
 <button id="b" type="button" style="display:none" onclick="go()">チェックした案を投稿する</button>
 </div>
-<div id="neta" style="display:none">
-<h1>ネタを渡す</h1>
+<div id="own" style="display:none">
+<div class="tabs"><button type="button" id="tab-neta" onclick="tab('neta')">ネタを渡す</button><button type="button" id="tab-quote" onclick="tab('quote')">引用RTを頼む</button></div>
+<div id="neta">
 <p class="sub">「〇〇について〜してみたい」くらいで大丈夫です。Claude が調べて、使い方と裏取りをネタ帳にまとめます。次の定例タスクで優先して使います。</p>
-<textarea id="nt" maxlength="1000" placeholder="例：健診の胃カメラで「萎縮あり」と言われた人向けに何か書きたい" oninput="count()"></textarea>
-<div class="count" id="ncount">0 / 1000</div>
+<textarea id="nt" maxlength="1000" placeholder="例：健診の胃カメラで「萎縮あり」と言われた人向けに何か書きたい" oninput="count('nt')"></textarea>
+<div class="count" id="nt-count">0 / 1000</div>
 <p class="note">患者さんが特定できること（名前・日付・施設など）は書かないでください。</p>
-<button id="nb" type="button" onclick="netaSend()">Claude に渡す</button>
+<button id="nb" type="button" onclick="netaSend('neta')">Claude に渡す</button>
+</div>
+<div id="quote" style="display:none">
+<p class="sub">引用RTしてほしいポストの URL を貼ってください。言いたいことがあれば下に書きます（空なら Claude が考えます）。Claude が文面を2案作り、10〜20分で LINE にカードが届きます。投稿できるのは今日中です。</p>
+<input id="qu" type="url" inputmode="url" placeholder="https://x.com/…/status/…">
+<textarea id="qt" maxlength="1000" placeholder="（任意）言いたいこと。例：前処置がつらいのは分かる。でも最近は量の少ない下剤もある、と伝えたい" oninput="count('qt')"></textarea>
+<div class="count" id="qt-count">0 / 1000</div>
+<p class="note">患者さんが特定できること（名前・日付・施設など）は書かないでください。</p>
+<button id="qb" type="button" onclick="netaSend('quote')">Claude に頼む</button>
+</div>
 <div id="nm" class="msg" style="display:none"></div>
-<h2>これまでのネタ <button class="small" type="button" onclick="netaLoad()">更新</button></h2>
+<h2>これまでの依頼 <button class="small" type="button" onclick="netaLoad()">更新</button></h2>
 <div id="nlist"><p class="sub">読み込み中…</p></div>
 </div>
 <div id="m" class="msg" style="display:none"></div>
@@ -124,7 +141,7 @@ async function main() {
     try { await liff.init({ liffId }); } catch (e) { /* LIFF でなくても動く */ }
     p = params();  // init のあとで URL が本来のクエリに戻ることがある
   }
-  if (p.get("page") === "neta") return netaMain(liffId);
+  if (p.get("page") === "neta" || p.get("page") === "quote") return netaMain(liffId, p.get("page"));
   K = p.get("k") || ""; FILE = p.get("file") || "";
   if (!K || !FILE) { document.getElementById("sub").textContent = ""; show("開き方が正しくありません。LINE のカードの「選んで投稿」から開いてください。", true); return; }
   document.getElementById("sub").textContent = FILE;
@@ -154,22 +171,35 @@ async function go() {
   b.disabled = false; b.textContent = "チェックした案を投稿する";
 }
 
-// ---- ネタ提案ページ（リッチメニューの「ネタを渡す」→ https://liff.line.me/<ID>?page=neta&liff=<ID>） ----
-const STATUS = { queued: "受付（調査待ち）", running: "調査中", done: "ネタ帳に入りました", used: "案にしました",
-                 failed: "調べられませんでした", dropped: "使えませんでした" };
+// ---- ネタ提案ページ（リッチメニューの「ネタを渡す」→ ?page=neta、「引用RTを頼む」→ ?page=quote） ----
+const STATUS = {
+  neta: { queued: "受付（調査待ち）", running: "調査中", done: "ネタ帳に入りました", used: "案にしました",
+          failed: "調べられませんでした", dropped: "使えませんでした" },
+  quote: { queued: "受付（作成待ち）", running: "文面を作成中", done: "案を作りました", used: "カードを送りました",
+           failed: "作れませんでした", dropped: "見送りました" },
+};
 
-function netaMain(liffId) {
-  document.title = "ネタを渡す";
+function tab(kind) {
+  for (const k of ["neta", "quote"]) {
+    document.getElementById(k).style.display = k === kind ? "block" : "none";
+    document.getElementById("tab-" + k).className = k === kind ? "on" : "";
+  }
+  document.title = kind === "quote" ? "引用RTを頼む" : "ネタを渡す";
+  document.getElementById("nm").style.display = "none";
+}
+
+function netaMain(liffId, kind) {
   document.getElementById("approve").style.display = "none";
-  document.getElementById("neta").style.display = "block";
+  document.getElementById("own").style.display = "block";
+  tab(kind);
   let loggedIn = false;
   try { loggedIn = !!(window.liff && liff.isLoggedIn()); } catch (e) {}
   if (!loggedIn) {
     // LINE の外（PC のブラウザなど）では LINE ログインを通してから戻ってくる
     try { if (liffId && window.liff && !liff.isInClient()) { liff.login({ redirectUri: location.href }); return; } } catch (e) {}
     document.getElementById("nlist").textContent = "";
-    document.getElementById("nb").disabled = true;
-    show("LINE のメニューの「ネタを渡す」から開いてください。", true, "nm");
+    document.getElementById("nb").disabled = document.getElementById("qb").disabled = true;
+    show("LINE のメニューから開いてください。", true, "nm");
     return;
   }
   netaLoad();
@@ -182,8 +212,8 @@ function tokens() {
   return t;
 }
 
-function count() {
-  document.getElementById("ncount").textContent = document.getElementById("nt").value.length + " / 1000";
+function count(id) {
+  document.getElementById(id + "-count").textContent = document.getElementById(id).value.length + " / 1000";
 }
 
 async function api(body) {
@@ -191,18 +221,22 @@ async function api(body) {
   return r.json();
 }
 
-async function netaSend() {
-  const t = document.getElementById("nt");
-  const text = t.value.trim();
-  if (!text) { show("ネタを書いてください。", true, "nm"); return; }
-  const b = document.getElementById("nb");
+const QUOTE_URL = /^https?:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com\/[A-Za-z0-9_]{1,15}\/status\/\d+/;
+
+async function netaSend(kind) {
+  const t = document.getElementById(kind === "quote" ? "qt" : "nt");
+  const u = document.getElementById("qu");
+  const text = t.value.trim(), url = kind === "quote" ? u.value.trim() : "";
+  if (kind === "neta" && !text) { show("ネタを書いてください。", true, "nm"); return; }
+  if (kind === "quote" && !QUOTE_URL.test(url)) { show("引用RTしたいポストの URL（https://x.com/…/status/…）を貼ってください。", true, "nm"); return; }
+  const b = document.getElementById(kind === "quote" ? "qb" : "nb"), label = b.textContent;
   b.disabled = true; b.textContent = "送信中…";
   try {
-    const d = await api({ action: "neta_submit", text });
+    const d = await api({ action: "neta_submit", kind, text, url });
     show(d.message || (d.ok ? "受け付けました" : "送れませんでした"), !d.ok, "nm");
-    if (d.ok) { t.value = ""; count(); netaLoad(); }
+    if (d.ok) { t.value = ""; u.value = kind === "quote" ? "" : u.value; count(t.id); netaLoad(); }
   } catch (e) { show("送れませんでした: " + e.message, true, "nm"); }
-  b.disabled = false; b.textContent = "Claude に渡す";
+  b.disabled = false; b.textContent = label;
 }
 
 function when(ts) {
@@ -218,12 +252,19 @@ async function netaLoad() {
   if (!d.ok) { show(d.message || d.error || "読み込めませんでした", true, "nm"); return; }
   if (!d.items.length) { list.appendChild(el("p", "sub", "まだありません。")); return; }
   for (const n of d.items) {
+    const kind = n.kind === "quote" ? "quote" : "neta";
     const box = el("div", "item");
     const top = el("div", "top");
-    top.appendChild(el("span", "badge s-" + n.status, STATUS[n.status] || n.status));
+    top.appendChild(el("span", "kind", kind === "quote" ? "引用RT" : "ネタ"));
+    top.appendChild(el("span", "badge s-" + n.status, STATUS[kind][n.status] || n.status));
     top.appendChild(el("span", "", when(n.ts)));
     box.appendChild(top);
-    box.appendChild(el("div", "q", n.text));
+    if (n.url) {
+      const a = el("a", "", n.url);
+      a.href = n.url; a.target = "_blank"; a.rel = "noopener";
+      box.appendChild(a);
+    }
+    box.appendChild(el("div", "q", n.text || (kind === "quote" ? "（言いたいことは Claude に任せる）" : "")));
     if (n.title) box.appendChild(el("div", "ttl", n.title));
     if (n.summary) box.appendChild(el("div", "sum", n.summary));
     if (n.note) box.appendChild(el("div", "nt", n.note));
