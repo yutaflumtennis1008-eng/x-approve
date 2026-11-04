@@ -8,6 +8,7 @@
 <style>
   body{font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;margin:0;padding:16px;background:#f4f6f8;color:#222}
   h1{font-size:18px;margin:0 0 6px}
+  h2{font-size:16px;margin:24px 0 8px;display:flex;align-items:center;justify-content:space-between}
   .sub{font-size:13px;color:#666;margin:0 0 12px;word-break:break-all}
   label{display:flex;gap:12px;align-items:flex-start;background:#fff;border-radius:12px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
   input[type=checkbox]{width:28px;height:28px;flex:none;margin:2px 0 0}
@@ -15,25 +16,52 @@
   .id{font-weight:bold;font-size:17px}
   .t{font-size:14px;color:#444;margin-top:2px}
   .need{display:inline-block;background:#fdecea;color:#c62828;border-radius:6px;padding:1px 6px;font-size:12px;margin-left:6px}
+  .own{display:inline-block;background:#fde7ef;color:#ad1457;border-radius:6px;padding:1px 6px;font-size:12px;margin-left:6px}
   .body{font-size:15px;line-height:1.6;white-space:pre-wrap;margin-top:8px;color:#222;word-break:break-word}
   .orig{font-size:13px;line-height:1.5;white-space:pre-wrap;margin-top:8px;padding:8px 10px;border-left:3px solid #bbb;background:#f7f7f7;color:#555;word-break:break-word}
   .orig b{display:block;font-size:12px;color:#888;margin-bottom:2px}
   button{width:100%;padding:16px;font-size:18px;font-weight:bold;color:#fff;background:#1f6f8b;border:0;border-radius:12px;margin-top:8px}
   button:disabled{background:#9bb}
+  button.small{width:auto;padding:6px 12px;font-size:13px;margin:0;background:#e6ecef;color:#1f6f8b}
   .msg{margin-top:14px;padding:12px;border-radius:10px;background:#fff;font-size:15px;white-space:pre-wrap}
   .err{background:#fdecea;color:#c62828}
+  textarea{box-sizing:border-box;width:100%;min-height:140px;padding:12px;font-size:16px;line-height:1.6;border:1px solid #cdd6db;border-radius:12px;font-family:inherit;background:#fff}
+  .note{font-size:12px;color:#ad1457;margin:6px 0 0}
+  .count{font-size:12px;color:#888;text-align:right;margin-top:4px}
+  .item{background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .item .top{display:flex;gap:8px;align-items:center;font-size:12px;color:#888}
+  .badge{display:inline-block;border-radius:6px;padding:1px 8px;font-size:12px;font-weight:bold}
+  .s-queued{background:#eceff1;color:#546e7a}.s-running{background:#e3f2fd;color:#1565c0}.s-done{background:#e8f5e9;color:#2e7d32}
+  .s-used{background:#fde7ef;color:#ad1457}.s-failed,.s-dropped{background:#fdecea;color:#c62828}
+  .item .q{font-size:14px;line-height:1.5;margin-top:6px;white-space:pre-wrap;word-break:break-word}
+  .item .ttl{font-size:14px;font-weight:bold;color:#1f6f8b;margin-top:8px}
+  .item .sum{font-size:14px;line-height:1.6;margin-top:4px;color:#333;white-space:pre-wrap;word-break:break-word}
+  .item .nt{font-size:12px;color:#666;margin-top:6px}
 </style>
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 </head>
 <body>
+<div id="approve">
 <h1>X 投稿の承認</h1>
 <p class="sub" id="sub">読み込み中…</p>
 <div id="list"></div>
 <button id="b" type="button" style="display:none" onclick="go()">チェックした案を投稿する</button>
+</div>
+<div id="neta" style="display:none">
+<h1>ネタを渡す</h1>
+<p class="sub">「〇〇について〜してみたい」くらいで大丈夫です。Claude が調べて、使い方と裏取りをネタ帳にまとめます。次の定例タスクで優先して使います。</p>
+<textarea id="nt" maxlength="1000" placeholder="例：健診の胃カメラで「萎縮あり」と言われた人向けに何か書きたい" oninput="count()"></textarea>
+<div class="count" id="ncount">0 / 1000</div>
+<p class="note">患者さんが特定できること（名前・日付・施設など）は書かないでください。</p>
+<button id="nb" type="button" onclick="netaSend()">Claude に渡す</button>
+<div id="nm" class="msg" style="display:none"></div>
+<h2>これまでのネタ <button class="small" type="button" onclick="netaLoad()">更新</button></h2>
+<div id="nlist"><p class="sub">読み込み中…</p></div>
+</div>
 <div id="m" class="msg" style="display:none"></div>
 <button id="c" type="button" style="display:none;background:#666" onclick="closeMe()">閉じる</button>
 <script>
-// 受け口（Google Apps Script）。鍵（k）が合わないと何も返さない
+// 受け口（Google Apps Script）。承認ページは鍵（k）、ネタ提案ページは LINE ログインのトークンで確かめる
 const API = "https://script.google.com/macros/s/AKfycbxDx_sbobVwSXbsIjyg-0Ij4axSwhhLTGA5r-yXz572rcwWtxLuJ1YDXFMKaSFDztgK/exec";
 let K = "", FILE = "";
 
@@ -55,8 +83,8 @@ function el(tag, cls, text) {
   return e;
 }
 
-function show(text, err) {
-  const m = document.getElementById("m");
+function show(text, err, id) {
+  const m = document.getElementById(id || "m");
   m.style.display = "block";
   m.textContent = text;
   m.className = "msg" + (err ? " err" : "");
@@ -71,6 +99,7 @@ function render(cands) {
     cb.type = "checkbox"; cb.name = "ids"; cb.value = c.id;
     const w = el("div", "w");
     const id = el("div", "id", c.id);
+    if (c.own) id.appendChild(el("span", "own", "持ち込み"));
     if (c.need) id.appendChild(el("span", "need", "個別承認が必要"));
     w.appendChild(id);
     if (c.title) w.appendChild(el("div", "t", c.title));
@@ -95,6 +124,7 @@ async function main() {
     try { await liff.init({ liffId }); } catch (e) { /* LIFF でなくても動く */ }
     p = params();  // init のあとで URL が本来のクエリに戻ることがある
   }
+  if (p.get("page") === "neta") return netaMain(liffId);
   K = p.get("k") || ""; FILE = p.get("file") || "";
   if (!K || !FILE) { document.getElementById("sub").textContent = ""; show("開き方が正しくありません。LINE のカードの「選んで投稿」から開いてください。", true); return; }
   document.getElementById("sub").textContent = FILE;
@@ -122,6 +152,83 @@ async function go() {
     if (d.ok) { document.getElementById("c").style.display = "block"; return; }
   } catch (e) { show("送れませんでした: " + e.message, true); }
   b.disabled = false; b.textContent = "チェックした案を投稿する";
+}
+
+// ---- ネタ提案ページ（リッチメニューの「ネタを渡す」→ https://liff.line.me/<ID>?page=neta&liff=<ID>） ----
+const STATUS = { queued: "受付（調査待ち）", running: "調査中", done: "ネタ帳に入りました", used: "案にしました",
+                 failed: "調べられませんでした", dropped: "使えませんでした" };
+
+function netaMain(liffId) {
+  document.title = "ネタを渡す";
+  document.getElementById("approve").style.display = "none";
+  document.getElementById("neta").style.display = "block";
+  let loggedIn = false;
+  try { loggedIn = !!(window.liff && liff.isLoggedIn()); } catch (e) {}
+  if (!loggedIn) {
+    // LINE の外（PC のブラウザなど）では LINE ログインを通してから戻ってくる
+    try { if (liffId && window.liff && !liff.isInClient()) { liff.login({ redirectUri: location.href }); return; } } catch (e) {}
+    document.getElementById("nlist").textContent = "";
+    document.getElementById("nb").disabled = true;
+    show("LINE のメニューの「ネタを渡す」から開いてください。", true, "nm");
+    return;
+  }
+  netaLoad();
+}
+
+function tokens() {
+  const t = {};
+  try { t.id_token = liff.getIDToken() || ""; } catch (e) {}
+  try { t.access_token = liff.getAccessToken() || ""; } catch (e) {}
+  return t;
+}
+
+function count() {
+  document.getElementById("ncount").textContent = document.getElementById("nt").value.length + " / 1000";
+}
+
+async function api(body) {
+  const r = await fetch(API, { method: "POST", body: JSON.stringify(Object.assign(body, tokens())) });
+  return r.json();
+}
+
+async function netaSend() {
+  const t = document.getElementById("nt");
+  const text = t.value.trim();
+  if (!text) { show("ネタを書いてください。", true, "nm"); return; }
+  const b = document.getElementById("nb");
+  b.disabled = true; b.textContent = "送信中…";
+  try {
+    const d = await api({ action: "neta_submit", text });
+    show(d.message || (d.ok ? "受け付けました" : "送れませんでした"), !d.ok, "nm");
+    if (d.ok) { t.value = ""; count(); netaLoad(); }
+  } catch (e) { show("送れませんでした: " + e.message, true, "nm"); }
+  b.disabled = false; b.textContent = "Claude に渡す";
+}
+
+function when(ts) {
+  const d = new Date(ts);
+  return (d.getMonth() + 1) + "/" + d.getDate() + " " + d.getHours() + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
+async function netaLoad() {
+  const list = document.getElementById("nlist");
+  let d;
+  try { d = await api({ action: "neta_list" }); } catch (e) { list.textContent = "読み込めませんでした: " + e.message; return; }
+  list.textContent = "";
+  if (!d.ok) { show(d.message || d.error || "読み込めませんでした", true, "nm"); return; }
+  if (!d.items.length) { list.appendChild(el("p", "sub", "まだありません。")); return; }
+  for (const n of d.items) {
+    const box = el("div", "item");
+    const top = el("div", "top");
+    top.appendChild(el("span", "badge s-" + n.status, STATUS[n.status] || n.status));
+    top.appendChild(el("span", "", when(n.ts)));
+    box.appendChild(top);
+    box.appendChild(el("div", "q", n.text));
+    if (n.title) box.appendChild(el("div", "ttl", n.title));
+    if (n.summary) box.appendChild(el("div", "sum", n.summary));
+    if (n.note) box.appendChild(el("div", "nt", n.note));
+    list.appendChild(box);
+  }
 }
 
 function closeMe() {
