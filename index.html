@@ -40,6 +40,9 @@
   .badge{display:inline-block;border-radius:6px;padding:1px 8px;font-size:12px;font-weight:bold}
   .s-queued{background:#eceff1;color:#546e7a}.s-running{background:#e3f2fd;color:#1565c0}.s-done{background:#e8f5e9;color:#2e7d32}
   .s-used{background:#fde7ef;color:#ad1457}.s-failed,.s-dropped{background:#fdecea;color:#c62828}
+  .s-posted{background:#e8f5e9;color:#2e7d32}.s-skipped{background:#eceff1;color:#546e7a}
+  .item button{padding:10px;font-size:15px;margin-top:10px}
+  #back{margin:0 0 10px}
   .item .q{font-size:14px;line-height:1.5;margin-top:6px;white-space:pre-wrap;word-break:break-word}
   .item .ttl{font-size:14px;font-weight:bold;color:#1f6f8b;margin-top:8px}
   .item .sum{font-size:14px;line-height:1.6;margin-top:4px;color:#333;white-space:pre-wrap;word-break:break-word}
@@ -49,6 +52,7 @@
 </head>
 <body>
 <div id="approve">
+<button id="back" class="small" type="button" style="display:none" onclick="backToList()">← これまでの依頼に戻る</button>
 <h1>X 投稿の承認</h1>
 <p class="sub" id="sub">読み込み中…</p>
 <div id="list"></div>
@@ -64,7 +68,7 @@
 <button id="nb" type="button" onclick="netaSend('neta')">Claude に渡す</button>
 </div>
 <div id="quote" style="display:none">
-<p class="sub">引用RTしてほしいポストの URL を貼ってください。言いたいことがあれば下に書きます（空なら Claude が考えます）。Claude が文面を2案作り、10〜20分で LINE にカードが届きます。投稿できるのは今日中です。</p>
+<p class="sub">引用RTしてほしいポストの URL を貼ってください。言いたいことがあれば下に書きます（空なら Claude が考えます）。Claude が文面を2案作ります（10〜20分）。できたら下の「これまでの依頼」に「選んで投稿」が出ます（LINE のカードは送りません）。投稿できるのは今日中です。</p>
 <input id="qu" type="url" inputmode="url" placeholder="https://x.com/…/status/…">
 <textarea id="qt" maxlength="1000" placeholder="（任意）言いたいこと。例：前処置がつらいのは分かる。でも最近は量の少ない下剤もある、と伝えたい" oninput="count('qt')"></textarea>
 <div class="count" id="qt-count">0 / 1000</div>
@@ -81,6 +85,7 @@
 // 受け口（Google Apps Script）。承認ページは鍵（k）、ネタ提案ページは LINE ログインのトークンで確かめる
 const API = "https://script.google.com/macros/s/AKfycbxDx_sbobVwSXbsIjyg-0Ij4axSwhhLTGA5r-yXz572rcwWtxLuJ1YDXFMKaSFDztgK/exec";
 let K = "", FILE = "";
+let OWNER = false;  // 一覧の「選んで投稿」から開いた承認（引用RTの依頼の案）。鍵の代わりに LINE ログインで確かめる
 
 function params() {
   // LIFF（https://liff.line.me/<ID>?k=…&file=…）から開くと、クエリが liff.state にまとめて入ることがある
@@ -163,10 +168,10 @@ async function go() {
   b.disabled = true; b.textContent = "送信中…";
   try {
     // 本文は text/plain で送る（preflight を避ける）。受け口は JSON として読む
-    const r = await fetch(API, { method: "POST", body: JSON.stringify({ action: "web_post", key: K, file: FILE, ids }) });
-    const d = await r.json();
+    const d = OWNER ? await api({ action: "own_post", file: FILE, ids })
+      : await (await fetch(API, { method: "POST", body: JSON.stringify({ action: "web_post", key: K, file: FILE, ids }) })).json();
     show(d.message || (d.ok ? "受け付けました" : "送れませんでした"), !d.ok);
-    if (d.ok) { document.getElementById("c").style.display = "block"; return; }
+    if (d.ok) { document.getElementById("c").style.display = "block"; b.style.display = "none"; return; }
   } catch (e) { show("送れませんでした: " + e.message, true); }
   b.disabled = false; b.textContent = "チェックした案を投稿する";
 }
@@ -175,9 +180,32 @@ async function go() {
 const STATUS = {
   neta: { queued: "受付（調査待ち）", running: "調査中", done: "ネタ帳に入りました", used: "案にしました",
           failed: "調べられませんでした", dropped: "使えませんでした" },
-  quote: { queued: "受付（作成待ち）", running: "文面を作成中", done: "案を作りました", used: "カードを送りました",
-           failed: "作れませんでした", dropped: "見送りました" },
+  quote: { queued: "受付（作成待ち）", running: "文面を作成中", done: "承認ページを準備中", used: "案ができました",
+           posted: "投稿しました", skipped: "投稿しませんでした", failed: "作れませんでした", dropped: "見送りました" },
 };
+
+// 一覧の「選んで投稿」：同じページの中で承認の画面に切り替える
+async function openApprove(file) {
+  OWNER = true; FILE = file;
+  for (const [id, v] of [["own", "none"], ["approve", "block"], ["back", "inline-block"], ["m", "none"], ["c", "none"]])
+    document.getElementById(id).style.display = v;
+  const b = document.getElementById("b");
+  b.style.display = "none"; b.disabled = false; b.textContent = "チェックした案を投稿する";
+  document.getElementById("sub").textContent = file;
+  document.getElementById("list").textContent = "";
+  window.scrollTo(0, 0);
+  let data;
+  try { data = await api({ action: "own_cands", file }); } catch (e) { show("候補を取得できませんでした: " + e.message, true); return; }
+  if (!data.ok) { show(data.message || data.error || "forbidden", true); return; }
+  if (!data.open) show("受付時間外です（6時〜24時）。", true);
+  render(data.cands || []);
+}
+
+function backToList() {
+  for (const [id, v] of [["approve", "none"], ["back", "none"], ["m", "none"], ["c", "none"], ["own", "block"]])
+    document.getElementById(id).style.display = v;
+  netaLoad();
+}
 
 function tab(kind) {
   for (const k of ["neta", "quote"]) {
@@ -273,6 +301,12 @@ async function netaLoad() {
     if (n.title) box.appendChild(el("div", "ttl", n.title));
     if (n.summary) box.appendChild(el("div", "sum", n.summary));
     if (n.note) box.appendChild(el("div", "nt", n.note));
+    if (kind === "quote" && n.status === "used" && n.file) {
+      const go = el("button", "", "選んで投稿");
+      go.type = "button";
+      go.onclick = () => openApprove(n.file);
+      box.appendChild(go);
+    }
     list.appendChild(box);
   }
 }
