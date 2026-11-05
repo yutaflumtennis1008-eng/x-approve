@@ -141,7 +141,7 @@ async function main() {
     try { await liff.init({ liffId }); } catch (e) { /* LIFF でなくても動く */ }
     p = params();  // init のあとで URL が本来のクエリに戻ることがある
   }
-  if (p.get("page") === "neta" || p.get("page") === "quote") return netaMain(liffId, p.get("page"));
+  if (p.get("page") === "neta" || p.get("page") === "quote") return netaMain(liffId, p.get("page"), p.get("url") || "");
   K = p.get("k") || ""; FILE = p.get("file") || "";
   if (!K || !FILE) { document.getElementById("sub").textContent = ""; show("開き方が正しくありません。LINE のカードの「選んで投稿」から開いてください。", true); return; }
   document.getElementById("sub").textContent = FILE;
@@ -188,10 +188,15 @@ function tab(kind) {
   document.getElementById("nm").style.display = "none";
 }
 
-function netaMain(liffId, kind) {
+function netaMain(liffId, kind, url) {
   document.getElementById("approve").style.display = "none";
   document.getElementById("own").style.display = "block";
   tab(kind);
+  // LINE の共有で URL だけ送ったときの返信のリンクから開くと、URL が入っている（言いたいことを足すだけでよい）
+  if (QUOTE_URL.test(url)) {
+    document.getElementById("qu").value = url;
+    document.getElementById("qt").focus();
+  }
   let loggedIn = false;
   try { loggedIn = !!(window.liff && liff.isLoggedIn()); } catch (e) {}
   if (!loggedIn) {
