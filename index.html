@@ -152,6 +152,8 @@ async function main() {
     p = params();  // init のあとで URL が本来のクエリに戻ることがある
   }
   if (p.get("page") === "neta" || p.get("page") === "quote") return netaMain(liffId, p.get("page"), p.get("url") || "");
+  // メールの「選んで投稿」（引用RTの依頼・リプライへの返信の案）：LINE ログインで本人か確かめて、その案の承認の画面を開く
+  if (p.get("page") === "own") return netaMain(liffId, "quote", "", p.get("file") || "");
   K = p.get("k") || ""; FILE = p.get("file") || "";
   if (!K || !FILE) { document.getElementById("sub").textContent = ""; show("開き方が正しくありません。LINE のカードの「選んで投稿」から開いてください。", true); return; }
   document.getElementById("sub").textContent = FILE;
@@ -187,7 +189,9 @@ const STATUS = {
           failed: "調べられませんでした", dropped: "使えませんでした" },
   quote: { queued: "受付（作成待ち）", running: "文面を作成中", done: "承認ページを準備中", used: "案ができました",
            posted: "投稿しました", skipped: "投稿しませんでした", failed: "作れませんでした", dropped: "見送りました" },
+  reply: { used: "返信案ができました", posted: "返信しました", skipped: "返信しませんでした" },
 };
+const KIND_LABEL = { neta: "ネタ", quote: "引用RT", reply: "リプ返信" };
 
 // 一覧の「選んで投稿」：同じページの中で承認の画面に切り替える
 async function openApprove(file) {
@@ -221,7 +225,7 @@ function tab(kind) {
   document.getElementById("nm").style.display = "none";
 }
 
-function netaMain(liffId, kind, url) {
+function netaMain(liffId, kind, url, file) {
   document.getElementById("approve").style.display = "none";
   document.getElementById("own").style.display = "block";
   tab(kind);
@@ -240,6 +244,7 @@ function netaMain(liffId, kind, url) {
     show("LINE のメニューから開いてください。", true, "nm");
     return;
   }
+  if (file) return openApprove(file);
   netaLoad();
 }
 
@@ -290,10 +295,10 @@ async function netaLoad() {
   if (!d.ok) { show(d.message || d.error || "読み込めませんでした", true, "nm"); return; }
   if (!d.items.length) { list.appendChild(el("p", "sub", "まだありません。")); return; }
   for (const n of d.items) {
-    const kind = n.kind === "quote" ? "quote" : "neta";
+    const kind = KIND_LABEL[n.kind] ? n.kind : "neta";
     const box = el("div", "item");
     const top = el("div", "top");
-    top.appendChild(el("span", "kind", kind === "quote" ? "引用RT" : "ネタ"));
+    top.appendChild(el("span", "kind", KIND_LABEL[kind]));
     top.appendChild(el("span", "badge s-" + n.status, STATUS[kind][n.status] || n.status));
     top.appendChild(el("span", "", when(n.ts)));
     box.appendChild(top);
@@ -302,11 +307,11 @@ async function netaLoad() {
       a.href = n.url; a.target = "_blank"; a.rel = "noopener";
       box.appendChild(a);
     }
-    box.appendChild(el("div", "q", n.text || (kind === "quote" ? "（言いたいことは Claude に任せる）" : "")));
+    if (kind !== "reply") box.appendChild(el("div", "q", n.text || (kind === "quote" ? "（言いたいことは Claude に任せる）" : "")));
     if (n.title) box.appendChild(el("div", "ttl", n.title));
     if (n.summary) box.appendChild(el("div", "sum", n.summary));
     if (n.note) box.appendChild(el("div", "nt", n.note));
-    if (kind === "quote" && n.status === "used" && n.file) {
+    if ((kind === "quote" || kind === "reply") && n.status === "used" && n.file) {
       const go = el("button", "", "選んで投稿");
       go.type = "button";
       go.onclick = () => openApprove(n.file);
