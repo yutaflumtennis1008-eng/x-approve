@@ -22,6 +22,15 @@
   .t{font-size:14px;color:#444;margin-top:2px}
   .need{display:inline-block;background:#fdecea;color:#c62828;border-radius:6px;padding:1px 6px;font-size:12px;margin-left:6px}
   .own{display:inline-block;background:#fde7ef;color:#ad1457;border-radius:6px;padding:1px 6px;font-size:12px;margin-left:6px}
+  /* 画像の付く候補（2026-11-21〜）：番号の横の印・カードの左の帯・本の下の枠 */
+  .pic{display:inline-block;background:#ef6c00;color:#fff;border-radius:6px;padding:1px 8px;font-size:12px;margin-left:6px}
+  label.haspic{border-left:6px solid #ef6c00}
+  .picbox{margin:8px 0 12px;padding:10px 12px;border:2px dashed #ef6c00;border-radius:10px;background:#fff8e1;font-size:13px;line-height:1.5;color:#5d4037}
+  .picbox .h{font-size:15px;font-weight:bold;color:#e65100}
+  .picbox .how{margin-top:4px}
+  .picbox .desc{margin-top:6px;color:#666}
+  .picbox .desc b{color:#8d6e63}
+  .picbox .more{color:#1f6f8b;text-decoration:underline;margin-left:6px}
   .body{font-size:15px;line-height:1.6;white-space:pre-wrap;margin-top:8px;color:#222;word-break:break-word}
   .orig{font-size:13px;line-height:1.5;white-space:pre-wrap;margin-top:8px;padding:8px 10px;border-left:3px solid #bbb;background:#f7f7f7;color:#555;word-break:break-word}
   .orig b{display:block;font-size:12px;color:#888;margin-bottom:2px}
@@ -117,15 +126,69 @@ function show(text, err, id) {
   m.className = "msg" + (err ? " err" : "");
 }
 
+// 本文の中の画像の行（line_bridge.IMAGE_NOTE と同じ頭）。「🖼［画像を作る｜1:1・Pro］画像の説明」「🖼［画像つき｜1枚］」
+const IMAGE_NOTE = "🖼［";
+const PIC_CLIP = 80;     // 画像の説明はここまで出して、残りは「全文」で開く
+let MAKE_PIC = new Set();  // 選ぶと画像を作る候補（投稿の確認で知らせる）
+
+function imageBox(line) {
+  const m = line.slice(IMAGE_NOTE.length).match(/^([^｜］]*)(?:｜([^］]*))?］(.*)$/);
+  const make = !!m && m[1] === "画像を作る";
+  const opts = m && m[2] ? "（" + m[2] + "）" : "";
+  const desc = m ? m[3].trim() : "";
+  const box = el("div", "picbox");
+  box.appendChild(el("div", "h", (make ? "🖼 ここに画像を作ります" : "🖼 画像つき") + opts));
+  if (make) box.appendChild(el("div", "how",
+    "選ぶと画像を作って LINE に送ります。画像を見て「この画像で投稿」を押したときに投稿されます（「作り直し」「画像なしで投稿」も選べます）。"));
+  if (desc) {
+    const d = el("div", "desc");
+    d.appendChild(el("b", "", "画像の内容："));
+    const t = document.createTextNode(desc.length > PIC_CLIP ? desc.slice(0, PIC_CLIP) + "…" : desc);
+    d.appendChild(t);
+    if (desc.length > PIC_CLIP) {
+      const more = el("span", "more", "全文");
+      // 枠はチェックボックスの label の中なので、押してもチェックが変わらないように止める
+      more.onclick = e => { e.preventDefault(); t.nodeValue = desc; more.remove(); };
+      d.appendChild(more);
+    }
+    box.appendChild(d);
+  }
+  return box;
+}
+
+function bodyNode(text) {
+  // 本文。画像の行は、その本の下に画像の枠として出す
+  const w = el("div", "body");
+  let buf = [];
+  const flush = () => {
+    const s = buf.join("\n").replace(/^\n+|\n+$/g, "");
+    if (s) w.appendChild(el("div", "", s));
+    buf = [];
+  };
+  for (const ln of text.split("\n")) {
+    if (ln.startsWith(IMAGE_NOTE)) { flush(); w.appendChild(imageBox(ln)); }
+    else buf.push(ln);
+  }
+  flush();
+  return w;
+}
+
 function render(cands) {
   const list = document.getElementById("list");
   list.textContent = "";
+  MAKE_PIC = new Set();
   for (const c of cands) {
     const label = el("label");
     const cb = el("input");
     cb.type = "checkbox"; cb.name = "ids"; cb.value = c.id;
     const w = el("div", "w");
     const id = el("div", "id", c.id);
+    const pics = (c.body || "").split("\n").filter(l => l.startsWith(IMAGE_NOTE));
+    if (pics.some(l => l.startsWith(IMAGE_NOTE + "画像を作る"))) {
+      MAKE_PIC.add(c.id);
+      id.appendChild(el("span", "pic", "🖼 画像を作る"));
+    } else if (pics.length) id.appendChild(el("span", "pic", "🖼 画像つき"));
+    if (pics.length) label.className = "haspic";
     if (c.own) id.appendChild(el("span", "own", "持ち込み"));
     if (c.need) id.appendChild(el("span", "need", "個別承認が必要"));
     w.appendChild(id);
@@ -136,7 +199,7 @@ function render(cands) {
       o.appendChild(document.createTextNode(c.orig));
       w.appendChild(o);
     }
-    w.appendChild(el("div", "body", c.body || ""));
+    w.appendChild(bodyNode(c.body || ""));
     label.appendChild(cb); label.appendChild(w);
     list.appendChild(label);
   }
@@ -170,7 +233,10 @@ async function main() {
 async function go() {
   const ids = [...document.querySelectorAll("input[name=ids]:checked")].map(c => c.value);
   if (!ids.length) { show("投稿する案にチェックを入れてください。", true); return; }
-  if (!confirm(ids.join("、") + " を投稿します。よろしいですか？")) return;
+  const mk = ids.filter(id => MAKE_PIC.has(id));
+  if (!confirm(ids.join("、") + " を投稿します。"
+    + (mk.length ? "\n" + mk.join("、") + " は先に画像を作って LINE に送ります（画像を見てから投稿）。\n" : "")
+    + "よろしいですか？")) return;
   const b = document.getElementById("b");
   b.disabled = true; b.textContent = "送信中…";
   try {
