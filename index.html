@@ -32,6 +32,11 @@
   .picbox .desc b{color:#8d6e63}
   .picbox .more{color:#1f6f8b;text-decoration:underline;margin-left:6px}
   .body{font-size:15px;line-height:1.6;white-space:pre-wrap;margin-top:8px;color:#222;word-break:break-word}
+  /* 文面はその場で直せる入力欄（2026-11-21〜）。直した欄は橙の枠 */
+  textarea.edit{min-height:0;font-size:15px;padding:10px;margin-top:6px;resize:vertical;overflow:hidden;white-space:pre-wrap}
+  textarea.edit.changed{border:2px solid #ef6c00;background:#fffaf0}
+  .mark{font-weight:bold;color:#1f6f8b;margin-top:10px}
+  .fixed{display:inline-block;background:#ef6c00;color:#fff;border-radius:6px;padding:1px 6px;font-size:12px;margin-left:6px}
   .orig{font-size:13px;line-height:1.5;white-space:pre-wrap;margin-top:8px;padding:8px 10px;border-left:3px solid #bbb;background:#f7f7f7;color:#555;word-break:break-word}
   .orig b{display:block;font-size:12px;color:#888;margin-bottom:2px}
   button{width:100%;padding:16px;font-size:18px;font-weight:bold;color:#fff;background:#1f6f8b;border:0;border-radius:12px;margin-top:8px}
@@ -69,6 +74,7 @@
 <button id="back" class="small" type="button" style="display:none" onclick="backToList()">← これまでの依頼に戻る</button>
 <h1>X 投稿の承認</h1>
 <p class="sub" id="sub">読み込み中…</p>
+<p class="sub">文面はその場で直せます。直した案には自動でチェックが入り、直した文面で投稿します。</p>
 <div id="list"></div>
 <button id="b" type="button" style="display:none" onclick="go()">チェックした案を投稿する</button>
 </div>
@@ -156,21 +162,50 @@ function imageBox(line) {
   return box;
 }
 
-function bodyNode(text) {
-  // 本文。画像の行は、その本の下に画像の枠として出す
-  const w = el("div", "body");
-  let buf = [];
-  const flush = () => {
-    const s = buf.join("\n").replace(/^\n+|\n+$/g, "");
-    if (s) w.appendChild(el("div", "", s));
-    buf = [];
-  };
-  for (const ln of text.split("\n")) {
-    if (ln.startsWith(IMAGE_NOTE)) { flush(); w.appendChild(imageBox(ln)); }
-    else buf.push(ln);
+const MARKS = "①②③④⑤⑥⑦⑧⑨⑩";
+
+function splitTweets(body) {
+  // 本文（スレッドは「①\n本文\n\n②\n本文」）を本ごとの {text, notes（画像の行）} に分ける。印がなければ1本
+  const lines = body.split("\n");
+  const isMark = ln => ln.trim().length === 1 && MARKS.includes(ln.trim());
+  const multi = lines.length > 0 && isMark(lines[0]);
+  const out = [];
+  let cur = null;
+  for (const ln of lines) {
+    if (multi && isMark(ln)) { cur = { text: [], notes: [] }; out.push(cur); continue; }
+    if (!cur) { cur = { text: [], notes: [] }; out.push(cur); }
+    (ln.startsWith(IMAGE_NOTE) ? cur.notes : cur.text).push(ln);
   }
-  flush();
-  return w;
+  return out.map(t => ({ text: t.text.join("\n").replace(/^\n+|\n+$/g, ""), notes: t.notes }));
+}
+
+function grow(ta) { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + 2 + "px"; }
+
+function editor(c, cb, idNode) {
+  // 本ごとの入力欄（最初から案の文面が入っている）。直すと橙の枠になり、その案にチェックが入る
+  const box = el("div", "body");
+  const tw = splitTweets(c.body || "");
+  let badge = null;
+  tw.forEach((t, i) => {
+    if (tw.length > 1) box.appendChild(el("div", "mark", MARKS[i] || String(i + 1)));
+    const ta = el("textarea", "edit");
+    ta.value = t.text;
+    ta.dataset.id = c.id; ta.dataset.n = String(i + 1); ta.dataset.orig = t.text;
+    ta.rows = 2;
+    ta.oninput = () => {
+      grow(ta);
+      const changed = ta.value !== ta.dataset.orig;
+      ta.classList.toggle("changed", changed);
+      if (changed) cb.checked = true;
+      const any = [...box.querySelectorAll("textarea.edit")].some(x => x.value !== x.dataset.orig);
+      if (any && !badge) { badge = el("span", "fixed", "直した"); idNode.appendChild(badge); }
+      if (!any && badge) { badge.remove(); badge = null; }
+    };
+    ta.onclick = e => e.stopPropagation();  // 入力欄を押してもチェックが変わらないように
+    box.appendChild(ta);
+    t.notes.forEach(n => box.appendChild(imageBox(n)));
+  });
+  return box;
 }
 
 function render(cands) {
@@ -199,10 +234,11 @@ function render(cands) {
       o.appendChild(document.createTextNode(c.orig));
       w.appendChild(o);
     }
-    w.appendChild(bodyNode(c.body || ""));
+    w.appendChild(editor(c, cb, id));
     label.appendChild(cb); label.appendChild(w);
     list.appendChild(label);
   }
+  requestAnimationFrame(() => document.querySelectorAll("textarea.edit").forEach(grow));
   document.getElementById("b").style.display = cands.length ? "block" : "none";
   if (!cands.length) show("候補が見つかりません（古いカードか、まだ登録されていません）。", true);
 }
@@ -234,15 +270,23 @@ async function go() {
   const ids = [...document.querySelectorAll("input[name=ids]:checked")].map(c => c.value);
   if (!ids.length) { show("投稿する案にチェックを入れてください。", true); return; }
   const mk = ids.filter(id => MAKE_PIC.has(id));
+  // 直した文面（チェックした案の、直した本だけ）。{ "A-1": { "2": "文面" } }
+  const edits = {};
+  document.querySelectorAll("textarea.edit").forEach(ta => {
+    if (!ids.includes(ta.dataset.id) || ta.value === ta.dataset.orig) return;
+    (edits[ta.dataset.id] = edits[ta.dataset.id] || {})[ta.dataset.n] = ta.value;
+  });
+  const fixed = Object.keys(edits);
   if (!confirm(ids.join("、") + " を投稿します。"
+    + (fixed.length ? "\n" + fixed.join("、") + " は直した文面で投稿します。" : "")
     + (mk.length ? "\n" + mk.join("、") + " は先に画像を作って LINE に送ります（画像を見てから投稿）。\n" : "")
     + "よろしいですか？")) return;
   const b = document.getElementById("b");
   b.disabled = true; b.textContent = "送信中…";
   try {
     // 本文は text/plain で送る（preflight を避ける）。受け口は JSON として読む
-    const d = OWNER ? await api({ action: "own_post", file: FILE, ids })
-      : await (await fetch(API, { method: "POST", body: JSON.stringify({ action: "web_post", key: K, file: FILE, ids }) })).json();
+    const d = OWNER ? await api({ action: "own_post", file: FILE, ids, edits })
+      : await (await fetch(API, { method: "POST", body: JSON.stringify({ action: "web_post", key: K, file: FILE, ids, edits }) })).json();
     show(d.message || (d.ok ? "受け付けました" : "送れませんでした"), !d.ok);
     if (d.ok) { document.getElementById("c").style.display = "block"; b.style.display = "none"; return; }
   } catch (e) { show("送れませんでした: " + e.message, true); }
